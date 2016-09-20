@@ -539,11 +539,11 @@ class SmallfileWorkload:
     # indicate end of an operation,
     # this appends the elapsed time of the operation to .rsptimes array
 
-    def op_endtime(self, opname):
+    def op_endtime(self, opname, fsize):
         if self.measure_rsptimes:
             end_time = time.time()
             rsp_time = end_time - self.op_start_time
-            self.rsptimes.append((opname, self.op_start_time, rsp_time))
+            self.rsptimes.append((opname, self.op_start_time, rsp_time, (fsize / 1024)))
             self.op_start_time = None
 
     # save response times seen by this thread
@@ -553,10 +553,14 @@ class SmallfileWorkload:
             + '_' + self.opname + '_' + str(self.start_time) + '.csv'
         rsptime_fname = join(self.network_dir, fname)
         with open(rsptime_fname, 'w') as f:
-            for (opname, start_time, rsp_time) in self.rsptimes:
+            for (opname, start_time, rsp_time, fsize) in self.rsptimes:
                 # time granularity is microseconds, accuracy is less
-                f.write('%8s, %9.6f, %9.6f\n' %
-                        (opname, start_time - self.start_time, rsp_time))
+                if fsize == 0:
+                    f.write('%8s, %9.6f, %9.6f\n' %
+                         (opname, start_time - self.start_time, rsp_time))
+                else:
+                    f.write('%8s, %9.6f, %9.6f, %8d\n' %
+                         (opname, start_time - self.start_time, rsp_time, fsize))
             os.fsync(f.fileno())  # particularly for NFS this is needed
 
     # determine if test interval is over for this thread
@@ -1063,7 +1067,7 @@ class SmallfileWorkload:
                     if self.fsync:
                         os.fsync(fd)
                     os.close(fd)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, written)
 
     def do_mkdir(self):
         while self.do_another_file():
@@ -1077,14 +1081,14 @@ class SmallfileWorkload:
                     self.filenum -= 1
                     continue
             finally:
-                self.op_endtime(self.opname)
+                self.op_endtime(self.opname, 0)
 
     def do_rmdir(self):
         while self.do_another_file():
             dir = self.mk_file_nm(self.src_dirs) + '.d'
             self.op_starttime()
             os.rmdir(dir)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_symlink(self):
         while self.do_another_file():
@@ -1092,21 +1096,21 @@ class SmallfileWorkload:
             fn2 = self.mk_file_nm(self.dest_dirs) + '.s'
             self.op_starttime()
             os.symlink(fn, fn2)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_stat(self):
         while self.do_another_file():
             fn = self.mk_file_nm(self.src_dirs)
             self.op_starttime()
             os.stat(fn)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_chmod(self):
         while self.do_another_file():
             fn = self.mk_file_nm(self.src_dirs)
             self.op_starttime()
             os.chmod(fn, 0o646)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     # we use "prefix" parameter to provide a list of characters
     # to use as extended attribute name suffixes
@@ -1126,7 +1130,7 @@ class SmallfileWorkload:
                 if self.buf[j:self.xattr_size + j] != v:
                     raise MFRdWrExc('getxattr: value contents wrong',
                                     self.filenum, j, len(v))
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_setxattr(self):
         if not xattr_installed:
@@ -1145,7 +1149,7 @@ class SmallfileWorkload:
             if self.fsync:  # fsync also flushes xattr values and metadata
                 os.fsync(fd)
             os.close(fd)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_append(self):
         return self.do_write(append=True)
@@ -1184,7 +1188,7 @@ class SmallfileWorkload:
             finally:
                 if fd >= 0:
                     os.close(fd)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, written)
 
     def do_read(self):
         while self.do_another_file():
@@ -1219,7 +1223,7 @@ class SmallfileWorkload:
             finally:
                 if fd > -1:
                     os.close(fd)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, rszbytes)
 
     def do_readdir(self):
         if self.hash_to_dir:
@@ -1250,7 +1254,7 @@ class SmallfileWorkload:
                 for t in self.top_dirs:
                     next_dir = t + common_dir
                     dir_contents.extend(os.listdir(next_dir))
-                self.op_endtime(self.opname)
+                self.op_endtime(self.opname, 0)
                 prev_dir = common_dir
                 dir_map = {}
                 for listdir_filename in dir_contents:
@@ -1291,7 +1295,7 @@ class SmallfileWorkload:
                 for t in self.top_dirs:
                     next_dir = t + common_dir
                     dir_contents.extend(os.listdir(next_dir))
-                self.op_endtime(self.opname + '-readdir')
+                self.op_endtime(self.opname + '-readdir', 0)
                 prev_dir = common_dir
                 dir_map = {}
                 for listdir_filename in dir_contents:
@@ -1301,7 +1305,7 @@ class SmallfileWorkload:
             # per-file stat timing separate readdir timing
             self.op_starttime()
             os.stat(fn)
-            self.op_endtime(self.opname + '-stat')
+            self.op_endtime(self.opname + '-stat', 0)
             if not fn.startswith('d'):
                 file_count += 1  # only count files, not directories
             if os.path.basename(fn) not in dir_map:
@@ -1339,7 +1343,7 @@ class SmallfileWorkload:
                 elif st.st_size == original_sz_kb * self.BYTES_PER_KB:
                     break
             self.op_starttime(starttime=original_ctime)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_rename(self):
         in_same_dir = self.dest_dirs == self.src_dirs
@@ -1350,14 +1354,14 @@ class SmallfileWorkload:
                 fn2 = fn2 + self.rename_suffix
             self.op_starttime()
             os.rename(fn1, fn2)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     def do_delete(self):
         while self.do_another_file():
             fn = self.mk_file_nm(self.src_dirs)
             self.op_starttime()
             os.unlink(fn)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     # we only need this method because filenames after rename are different,
 
@@ -1369,7 +1373,7 @@ class SmallfileWorkload:
                 fn = fn + self.rename_suffix
             self.op_starttime()
             os.unlink(fn)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, 0)
 
     # this operation tries to emulate a OpenStack Swift GET request behavior
 
@@ -1423,7 +1427,7 @@ class SmallfileWorkload:
                             raise e
             finally:
                 os.close(fd)
-            self.op_endtime(self.opname)
+            self.op_endtime(self.opname, rszbytes)
 
     # this operation type tries to emulate what a Swift PUT request does
 
@@ -1511,7 +1515,7 @@ class SmallfileWorkload:
             finally:
                 if fd > -1:
                     os.close(fd)
-            self.op_endtime('swift-put')
+            self.op_endtime('swift-put', written)
 
     # unlike other ops, cleanup must always finish regardless of other threads
 
